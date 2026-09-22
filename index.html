@@ -300,7 +300,12 @@
                         </div>
                         <input type="text" id="quest-answer-input" autocomplete="off" spellcheck="false" class="w-full bg-slate-800/80 border border-slate-600 rounded-xl py-3 pl-10 pr-4 text-white text-lg font-medium placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all shadow-inner" placeholder="Въведете отговора...">
                     </div>
-                    <p class="text-[10px] text-slate-500 mt-2 ml-1"><i class="fa-solid fa-circle-info mr-1"></i> Спазвайте формата на отговора, посочен в условието. Не въвеждайте мерни единици.</p>
+                    <p id="answer-format-note" class="text-[10px] text-slate-500 mt-2 ml-1"><i class="fa-solid fa-circle-info mr-1"></i> Спазвайте формата на отговора, посочен в условието. Не въвеждайте мерни единици.</p>
+                </div>
+
+                <div id="quest-choices-wrap" class="hidden w-full mb-6">
+                    <p class="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider pl-1">Изберете отговор:</p>
+                    <div id="quest-choices" class="grid grid-cols-1 sm:grid-cols-2 gap-2" role="group" aria-label="Възможни отговори"></div>
                 </div>
 
                 <!-- Interactive Scratchpad / Calculations Area (Stylus & Touch support) -->
@@ -398,12 +403,16 @@
                     <div class="absolute -top-3 -left-3 w-8 h-8 bg-rose-900 rounded-full flex items-center justify-center border border-rose-500 shadow text-rose-200 font-bold" id="boss-streak">0/10</div>
                     <p id="boss-quest-text" class="text-lg text-slate-200 text-center mb-6 font-medium"></p>
                     
-                     <div class="w-full max-w-md mx-auto relative">
+                     <div id="boss-answer-wrap" class="w-full max-w-md mx-auto relative">
                          <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                              <i class="fa-solid fa-skull text-rose-500"></i>
                          </div>
                          <input type="text" id="boss-answer-input" autocomplete="off" spellcheck="false" class="w-full bg-slate-800 border border-rose-900/50 rounded-xl py-3 pl-10 pr-4 text-white text-center text-lg font-bold placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-rose-500 transition-all shadow-inner" placeholder="Отговор...">
                      </div>
+                    <div id="boss-choices-wrap" class="hidden w-full max-w-md mx-auto">
+                        <p class="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider text-center">Изберете отговор:</p>
+                        <div id="boss-choices" class="grid grid-cols-1 gap-2" role="group" aria-label="Възможни отговори"></div>
+                    </div>
                 </div>
                 
                 <div id="boss-feedback" class="hidden w-full max-w-2xl mb-5 rounded-xl border border-cyan-500/30 bg-slate-800/80 p-4 text-sm text-slate-200"></div>
@@ -818,7 +827,7 @@
             document.getElementById('btn-hint').disabled = false;
             document.getElementById('skip-broken-wrap')?.classList.remove('hidden');
             const skipBtn = document.getElementById('btn-skip-broken');
-            if (skipBtn) skipBtn.disabled = false;
+            if (skipBtn) skipBtn.disabled = Date.now() - lastSkipAt < SKIP_COOLDOWN_MS;
             
             const feedback = document.getElementById('quest-feedback');
             feedback.classList.add('hidden');
@@ -856,12 +865,145 @@
                 document.getElementById('quest-answer-input').parentElement.parentElement.classList.remove('hidden');
             }
 
+            const hasChoices = renderChoices(qData);
+
             const answerInput = document.getElementById('quest-answer-input');
             const useKeyboardFocus = window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches;
-            if (!qData.isVectorTask && useKeyboardFocus) answerInput.focus({ preventScroll: true });
+            if (!qData.isVectorTask && !hasChoices && useKeyboardFocus) answerInput.focus({ preventScroll: true });
             else answerInput.blur();
 
             triggerKaTeX();
+        }
+
+        // Словесните отговори се показват като текст: математичният режим
+        // премахва интервалите и „върху окръжността“ става „върхуокръжността“.
+        function formatAnswerForDisplay(answer) {
+            const value = String(answer ?? '');
+            const looksVerbal = /[А-Яа-яЁё]/.test(value) || /\s/.test(value.trim());
+            if (looksVerbal) {
+                const div = document.createElement('div');
+                div.textContent = value;
+                return div.innerHTML;
+            }
+            return `$${value}$`;
+        }
+
+        // --- Избираеми отговори при задачите със словесен отговор ---
+        // Пълните набори са по тип задача; верният отговор идва от самата задача,
+        // а останалите се теглят от набора, за да са смислени, а не случайни.
+        const CHOICE_POOLS = {
+            '1:7':  ['положителни', 'отрицателни', 'с различни знаци'],
+            '3:8':  ['<', '>', '='],
+            '3:19': ['A', 'B'],
+            '4:1':  ['DC', 'CD', 'BA', 'AD'],
+            '4:2':  ['BA', 'AB', 'CD', 'DA'],
+            '4:10': ['AC', 'CA', 'BC', 'AB'],
+            '4:11': ['CB', 'BC', 'AB', 'CA'],
+            '4:13': ['AD', 'DA', 'AC', 'BD'],
+            '4:14': ['AC', 'CA', 'BD', 'AB'],
+            '4:15': ['OC', 'CO', 'AO', 'OB'],
+            '5:21': ['център на описаната окръжност', 'център на вписаната окръжност', 'ортоцентър', 'медицентър'],
+            '5:22': ['център на вписаната окръжност', 'център на описаната окръжност', 'ортоцентър', 'медицентър'],
+            '5:23': ['ортоцентър', 'медицентър', 'инцентър', 'център на описаната окръжност'],
+            '5:24': ['в средата на хипотенузата', 'в средата на един от катетите', 'във върха на правия ъгъл', 'в медицентъра на триъгълника'],
+            '5:26': ['център на външновписаната окръжност', 'център на вписаната окръжност', 'център на описаната окръжност', 'ортоцентър'],
+            '6:1':  ['вътрешна', 'върху окръжността', 'външна'],
+            '6:2':  ['секуща', 'допирателна', 'външна права'],
+            '6:10': ['външни без общи точки', 'външно допирателни', 'пресичащи се', 'вътрешно допирателни', 'едната е вътре в другата без общи точки'],
+            '7:15': ['пермутация', 'вариация', 'комбинация', 'правило за умножение', 'правило за събиране']
+        };
+        const MAX_CHOICES = 4;
+
+        // Само видимият надпис на бутона; проверяваната стойност остава същата.
+        const CHOICE_LABELS = {
+            '6:1': {
+                'вътрешна': 'Точката е вътрешна за окръжността',
+                'върху окръжността': 'Точката лежи върху окръжността',
+                'външна': 'Точката е външна за окръжността'
+            }
+        };
+
+        function buildChoicesFor(realmId, qData) {
+            const pool = CHOICE_POOLS[`${realmId}:${qData.type}`];
+            if (!pool || !qData.a || !qData.a.length) return null;
+            const correct = qData.a[0];
+            const others = pool.filter(o => !checkAnswerAgainstList(o, qData.a));
+            for (let i = others.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [others[i], others[j]] = [others[j], others[i]];
+            }
+            const list = [correct, ...others.slice(0, MAX_CHOICES - 1)];
+            for (let i = list.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [list[i], list[j]] = [list[j], list[i]];
+            }
+            return list.length > 1 ? list : null;
+        }
+
+        const CHOICE_BASE_CLASS = 'quest-choice w-full text-left px-4 py-3 rounded-xl border text-sm font-medium transition touch-manipulation min-h-[48px] border-slate-600 bg-slate-800/60 text-slate-200 hover:border-indigo-400 hover:bg-slate-700/60';
+        const CHOICE_SELECTED_CLASS = 'quest-choice w-full text-left px-4 py-3 rounded-xl border text-sm font-medium transition touch-manipulation min-h-[48px] border-indigo-400 bg-indigo-600/30 text-white';
+
+        function selectChoice(value, btn, inputId = 'quest-answer-input') {
+            const input = document.getElementById(inputId);
+            if (input.disabled) return;
+            input.value = value;
+            btn.parentElement.querySelectorAll('.quest-choice').forEach(el => {
+                el.className = CHOICE_BASE_CLASS;
+                el.setAttribute('aria-pressed', 'false');
+            });
+            btn.className = CHOICE_SELECTED_CLASS;
+            btn.setAttribute('aria-pressed', 'true');
+        }
+
+        const QUEST_CHOICE_TARGET = {
+            wrapId: 'quest-choices-wrap', boxId: 'quest-choices',
+            inputId: 'quest-answer-input', noteId: 'answer-format-note', inputWrapId: null
+        };
+        const BOSS_CHOICE_TARGET = {
+            wrapId: 'boss-choices-wrap', boxId: 'boss-choices',
+            inputId: 'boss-answer-input', noteId: null, inputWrapId: 'boss-answer-wrap'
+        };
+
+        function renderChoices(qData, target = QUEST_CHOICE_TARGET, realmId = null) {
+            const wrap = document.getElementById(target.wrapId);
+            const box = document.getElementById(target.boxId);
+            const note = target.noteId ? document.getElementById(target.noteId) : null;
+            const input = document.getElementById(target.inputId);
+            const inputWrap = target.inputWrapId
+                ? document.getElementById(target.inputWrapId)
+                : input.parentElement.parentElement;
+            box.innerHTML = '';
+            const realm = realmId !== null ? realmId : gameState.activeRealmId;
+            const choices = qData.isVectorTask ? null : buildChoicesFor(realm, qData);
+            if (!choices) {
+                wrap.classList.add('hidden');
+                inputWrap.classList.remove('hidden');
+                if (note) note.classList.remove('hidden');
+                return false;
+            }
+            // При избираем отговор полето за писане се скрива, но остава носител
+            // на избраната стойност, за да не се пипа проверката на отговора.
+            inputWrap.classList.add('hidden');
+            if (note) note.classList.add('hidden');
+            wrap.classList.remove('hidden');
+            const labels = CHOICE_LABELS[`${realm}:${qData.type}`] || {};
+            for (const value of choices) {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = CHOICE_BASE_CLASS;
+                btn.setAttribute('aria-pressed', 'false');
+                btn.textContent = labels[value] || value;
+                btn.addEventListener('click', () => selectChoice(value, btn, target.inputId));
+                box.appendChild(btn);
+            }
+            return true;
+        }
+
+        function lockChoices() {
+            document.querySelectorAll('.quest-choice').forEach(el => {
+                el.disabled = true;
+                el.classList.add('opacity-60', 'pointer-events-none');
+            });
         }
 
         // --- Сократовски диалог при грешка ---
@@ -963,12 +1105,13 @@
                 }
                 feedbackText.innerHTML = `${intro}<strong>${label}</strong><br><span class="block mt-2">${qData.solution || ''}</span><br><span class="block mt-2 text-cyan-200"><strong>Правилното построение е показано в зелено.</strong></span>`;
             } else if (qData.solution) {
-                feedbackText.innerHTML = `${intro}<strong>${label}</strong><br><span class="block mt-2">${qData.solution}</span><br><span class="block mt-2 text-cyan-200"><strong>Отговор:</strong> $${qData.a[0]}$</span>`;
+                feedbackText.innerHTML = `${intro}<strong>${label}</strong><br><span class="block mt-2">${qData.solution}</span><br><span class="block mt-2 text-cyan-200"><strong>Отговор:</strong> ${formatAnswerForDisplay(qData.a[0])}</span>`;
             } else {
-                feedbackText.innerHTML = `${intro}<strong>${label}</strong><br><span class="block mt-2 text-cyan-200"><strong>Отговор:</strong> $${qData.a[0]}$</span>`;
+                feedbackText.innerHTML = `${intro}<strong>${label}</strong><br><span class="block mt-2 text-cyan-200"><strong>Отговор:</strong> ${formatAnswerForDisplay(qData.a[0])}</span>`;
             }
 
             document.getElementById('quest-answer-input').disabled = true;
+            lockChoices();
             document.getElementById('btn-submit').classList.add('hidden');
             document.getElementById('btn-next').classList.remove('hidden');
             document.getElementById('socratic-actions').classList.add('hidden');
@@ -1135,6 +1278,7 @@
                 document.getElementById('btn-submit').classList.add('hidden');
                 document.getElementById('btn-next').classList.remove('hidden');
                 document.getElementById('quest-answer-input').disabled = true;
+                lockChoices();
                 document.getElementById('socratic-actions').classList.add('hidden');
                 document.getElementById('socratic-panel').classList.add('hidden');
                 // Задачата вече е решена вярно — пропускането ѝ няма смисъл.
@@ -1180,7 +1324,7 @@
         // Ако след грешен отговор вече е вмъкната подобна задача, тя се премахва,
         // за да продължим със следващата от първоначалната поредица.
         let lastSkipAt = 0;
-        const SKIP_COOLDOWN_MS = 400;
+        const SKIP_COOLDOWN_MS = 800;
 
         function skipBrokenQuestion() {
             // Едно натискане прескача точно една задача: бързите повторни
@@ -1188,6 +1332,15 @@
             const now = Date.now();
             if (now - lastSkipAt < SKIP_COOLDOWN_MS) return;
             lastSkipAt = now;
+
+            // Бутонът се заключва веднага и се отключва едва след интервала,
+            // дори следващата задача да се е заредила преди това.
+            const pressed = document.getElementById('btn-skip-broken');
+            if (pressed) pressed.disabled = true;
+            setTimeout(() => {
+                const again = document.getElementById('btn-skip-broken');
+                if (again && Date.now() - lastSkipAt >= SKIP_COOLDOWN_MS) again.disabled = false;
+            }, SKIP_COOLDOWN_MS);
 
 
             const questions = gameState.activeRealmQuestions;
@@ -1880,6 +2033,7 @@
             document.getElementById('boss-quest-text').innerHTML = qData.q;
             document.getElementById('boss-answer-input').value = '';
             document.getElementById('boss-answer-input').disabled = false;
+            renderChoices(qData, BOSS_CHOICE_TARGET, realm.id);
             document.getElementById('boss-feedback')?.classList.add('hidden');
             document.getElementById('btn-boss-submit')?.classList.remove('hidden');
             document.getElementById('btn-boss-similar')?.classList.add('hidden');
@@ -1905,6 +2059,7 @@
 
             if (isCorrect) {
                 document.getElementById('boss-answer-input').disabled = true;
+                lockChoices();
                 document.getElementById('btn-boss-submit').classList.add('hidden');
                 gameState.bossStreak++;
                 gameState.solvedTasks++;
@@ -1940,6 +2095,7 @@
                     fb.classList.remove('hidden');
                 }
                 document.getElementById('boss-answer-input').disabled = true;
+                lockChoices();
                 document.getElementById('btn-boss-submit')?.classList.add('hidden');
                 document.getElementById('btn-boss-similar')?.classList.remove('hidden');
                 showToast('Прегледайте решението, после решете подобна задача.', 'warning');
